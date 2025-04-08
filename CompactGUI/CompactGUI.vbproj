@@ -1,8 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net9.0-windows</TargetFramework>
     <RootNamespace>CompactGUI</RootNamespace>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
@@ -53,6 +54,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="diskdetector-net" Version="0.3.2" />
     <PackageReference Include="Fody" Version="6.8.1">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
@@ -71,4 +73,25 @@
     <ProjectReference Include="..\CompactGUI.Watcher\CompactGUI.Watcher.vbproj" />
   </ItemGroup>
 
+  <Target Name="RenamePublishedExe" AfterTargets="Publish" Condition="'$(IsMonolithic)' == 'true'">
+    <Move SourceFiles="$(PublishDir)CompactGUI.exe"
+          DestinationFiles="$(PublishDir)CompactGUI.mono.exe"/>
+
+  </Target>
+  
+  <PropertyGroup>
+    <FinalPublishDir>$(ProjectDir)bin\publish\FinalOutput\</FinalPublishDir>
+  </PropertyGroup>
+
+  <Target Name="MovePublishedFiles" AfterTargets="Publish">
+    <Message Text="Moving published files to FinalOutput..." Importance="high" />
+    
+    <ItemGroup>
+        <PublishedFiles Include="$(PublishDir)**\*" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(PublishedFiles)" DestinationFolder="$(FinalPublishDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  
 </Project>
