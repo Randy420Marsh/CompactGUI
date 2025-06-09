@@ -1,4 +1,5 @@
-﻿Imports Microsoft.Toolkit.Mvvm.ComponentModel
+﻿Imports CommunityToolkit.Mvvm.ComponentModel
+
 Imports IWshRuntimeLibrary
 
 Public Class Settings : Inherits ObservableObject
@@ -17,6 +18,7 @@ Public Class Settings : Inherits ObservableObject
 
     Public Property MaxCompressionThreads As Integer = 0
     Public Property LockHDDsToOneThread As Boolean = True
+    Public Property EstimateCompressionForNonSteamFolders As Boolean = False
 
     Private _EnableBackgroundWatcher As Boolean = True
     Public Property EnableBackgroundWatcher As Boolean
@@ -40,22 +42,7 @@ Public Class Settings : Inherits ObservableObject
         End Set
     End Property
 
-    Private _WindowScalingFactor = 1
-    Public Property WindowScalingFactor As Double
-        Get
-            Return _WindowScalingFactor
-        End Get
-        Set(value As Double)
-            _WindowScalingFactor = value
-            WindowWidth = 500 * value
-            WindowHeight = 800 * value
 
-            OnPropertyChanged()
-        End Set
-    End Property
-
-    Public Property WindowWidth As Decimal = 500
-    Public Property WindowHeight As Decimal = 800
 
     Public Property AllowMultiInstance As Boolean = False
     Public Property EnablePreReleaseUpdates As Boolean = True

@@ -1,20 +1,13 @@
-﻿Imports Microsoft.Toolkit.Mvvm.ComponentModel
-Imports Microsoft.Toolkit.Mvvm.Input
-Imports Microsoft.Win32
+﻿
+Imports CommunityToolkit.Mvvm.ComponentModel
+Imports CommunityToolkit.Mvvm.Input
 
 Public Class SettingsViewModel : Inherits ObservableObject
 
-    Private Shared _instance As SettingsViewModel
-    Public Shared ReadOnly Property Instance As SettingsViewModel
-        Get
-            If _instance Is Nothing Then _instance = New SettingsViewModel()
-            Return _instance
-        End Get
-    End Property
 
     Public Property AppSettings As Settings = SettingsHandler.AppSettings
 
-    Protected Sub New()
+    Public Sub New()
 
         AddHandler AppSettings.PropertyChanged, AddressOf SettingsPropertyChanged
 
@@ -22,13 +15,9 @@ Public Class SettingsViewModel : Inherits ObservableObject
 
     Public Shared Async Function InitializeEnvironment() As Task
 
-        Await AddExecutableToRegistry()
+        ' Await AddExecutableToRegistry()
         Await SetEnv()
-        If SettingsHandler.AppSettings.IsContextIntegrated Then
-            Await Settings.AddContextMenus
-        Else
-            Await Settings.RemoveContextMenus
-        End If
+        Await If(SettingsHandler.AppSettings.IsContextIntegrated, Settings.AddContextMenus, Settings.RemoveContextMenus)
 
         If SettingsHandler.AppSettings.IsStartMenuEnabled Then
             Settings.CreateStartMenuShortcut()
@@ -39,7 +28,10 @@ Public Class SettingsViewModel : Inherits ObservableObject
     End Function
 
     Private Shared Async Function SetEnv() As Task
-        Await Task.Run(Sub() Environment.SetEnvironmentVariable("IridiumIO", IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "IridiumIO"), EnvironmentVariableTarget.User))
+        Dim desiredValue = IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "IridiumIO")
+        Dim currentValue = Environment.GetEnvironmentVariable("IridiumIO", EnvironmentVariableTarget.User)
+        If currentValue <> desiredValue Then Await Task.Run(Sub() Environment.SetEnvironmentVariable("IridiumIO", desiredValue, EnvironmentVariableTarget.User))
+
     End Function
 
     Private Sub SettingsPropertyChanged()
@@ -47,9 +39,9 @@ Public Class SettingsViewModel : Inherits ObservableObject
     End Sub
 
 
-    Private Shared Async Function AddExecutableToRegistry() As Task
-        Await Task.Run(Sub() Registry.SetValue("HKEY_CURRENT_USER\software\IridiumIO\CompactGUI\", "Executable Path", IO.Directory.GetCurrentDirectory))
-    End Function
+    'Private Shared Async Function AddExecutableToRegistry() As Task
+    '    Await Task.Run(Sub() Registry.SetValue("HKEY_CURRENT_USER\software\IridiumIO\CompactGUI\", "Executable Path", IO.Directory.GetCurrentDirectory))
+    'End Function
 
 
     Public Property EditSkipListCommand As ICommand = New RelayCommand(Sub()
@@ -58,7 +50,6 @@ Public Class SettingsViewModel : Inherits ObservableObject
                                                                        End Sub)
 
 
-    Public Property UIScalingSliderCommand As ICommand = New RelayCommand(Of Double)(Sub(val) SettingsHandler.AppSettings.WindowScalingFactor = val)
     Public Property DisableAutoCompressionCommand As ICommand = New RelayCommand(Sub() AppSettings.EnableBackgroundAutoCompression = False)
     Public Property EnableBackgroundWatcherCommand As ICommand = New RelayCommand(Sub() AppSettings.EnableBackgroundWatcher = True)
     Public Property OpenGitHubCommand As ICommand = New RelayCommand(Sub() Process.Start(New ProcessStartInfo("https://github.com/IridiumIO/CompactGUI") With {.UseShellExecute = True}))

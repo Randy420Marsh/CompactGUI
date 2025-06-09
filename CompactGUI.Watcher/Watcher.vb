@@ -1,11 +1,8 @@
 Imports System.Collections.ObjectModel
 Imports System.Text.Json
-Imports Microsoft.Toolkit.Mvvm.ComponentModel
 Imports CompactGUI.Core
 Imports System.Threading
-Imports System.Collections.Specialized
-Imports System.Runtime
-Imports System.ComponentModel
+Imports CommunityToolkit.Mvvm.ComponentModel
 
 <PropertyChanged.AddINotifyPropertyChangedInterface>
 Public Class Watcher : Inherits ObservableObject
@@ -67,6 +64,7 @@ Public Class Watcher : Inherits ObservableObject
     Sub New(excludedFiletypes As String())
 
         IdleDetector.Start()
+        Debug.WriteLine("Idle Detector Started")
         AddHandler IdleDetector.IsIdle, AddressOf OnSystemIdle
 
         BGCompactor = New BackgroundCompactor(excludedFiletypes)
@@ -117,20 +115,33 @@ Public Class Watcher : Inherits ObservableObject
 
     End Sub
 
-    Public Sub UpdateWatched(folder As String, ByRef analyser As Analyser, Optional immediateFlushToDisk As Boolean = True)
+    Public Sub UpdateWatched(folder As String, ByRef analyser As Analyser, isFreshlyCompressed As Boolean, Optional immediateFlushToDisk As Boolean = True)
 
         Dim existingItem = WatchedFolders.FirstOrDefault(Function(f) f.Folder = folder)
-        If existingItem IsNot Nothing Then
+
+        Dim existingFolderMonitor = FolderMonitors.FirstOrDefault(Function(f) f.Folder = folder)
+
+        If existingItem IsNot Nothing AndAlso existingFolderMonitor IsNot Nothing Then
 
             existingItem.LastCheckedDate = DateTime.Now
             existingItem.LastCheckedSize = analyser.CompressedBytes
-            existingItem.LastSystemModifiedDate = FolderMonitors.First(Function(f) f.Folder = folder).LastChangedDate
+            existingItem.LastUncompressedSize = analyser.UncompressedBytes
+            existingItem.LastSystemModifiedDate = DateTime.Now
+            If analyser.FileCompressionDetailsList.Count <> 0 Then
+                existingItem.CompressionLevel = analyser.FileCompressionDetailsList.Select(Function(f) f.CompressionMode).Max
+            End If
 
-            existingItem.CompressionLevel = analyser.FileCompressionDetailsList.Select(Function(f) f.CompressionMode).Max
+            If isFreshlyCompressed Then
+                existingItem.LastCompressedDate = DateTime.Now
+            End If
+
+            If isFreshlyCompressed OrElse existingItem.CompressionLevel = WOFCompressionAlgorithm.NO_COMPRESSION Then
+                existingItem.LastCompressedSize = analyser.CompressedBytes
+            End If
 
             FolderMonitors.First(Function(f) f.Folder = folder).HasTargetChanged = False
             OnPropertyChanged(NameOf(TotalSaved))
-            If Not immediateFlushToDisk Then WriteToFile()
+            If immediateFlushToDisk Then WriteToFile()
         End If
     End Sub
 
@@ -161,7 +172,6 @@ Public Class Watcher : Inherits ObservableObject
         WatchedFolders.Remove(item)
         WriteToFile()
 
-
     End Sub
 
 
@@ -172,10 +182,10 @@ Public Class Watcher : Inherits ObservableObject
 
         Dim ret = DeserializeAndValidateJSON(WatcherJSONFile)
         LastAnalysed = ret.Item1
-        Dim _WatchedFolders = ret.Item2
+        Dim retWatchedFolders = ret.Item2
 
 
-        Return _WatchedFolders
+        Return retWatchedFolders
     End Function
 
 
@@ -207,33 +217,53 @@ Public Class Watcher : Inherits ObservableObject
 
 
 
+    Private _isHandlingIdle As Boolean = False
 
-    Private Async Sub OnSystemIdle()
+    Private Async Function OnSystemIdle() As Task
+        If _isHandlingIdle Then Return
+        _isHandlingIdle = True
+        Try
 
-        If Not IsWatchingEnabled Then Return
+            Debug.WriteLine("System Idle Detected")
+            If Not IsWatchingEnabled Then Return
 
-        Dim recentThresholdDate As DateTime = DateTime.Now.AddSeconds(-LAST_SYSTEM_MODIFIED_TIME_THRESHOLD)
-        If FolderMonitors.Exists(Function(x) x.LastChangedDate > recentThresholdDate) Then Return
+            Dim recentThresholdDate As DateTime = DateTime.Now.AddSeconds(-LAST_SYSTEM_MODIFIED_TIME_THRESHOLD)
+            If FolderMonitors.Exists(Function(x) x.LastChangedDate > recentThresholdDate) Then Return
 
-        If _parseWatchersSemaphore.CurrentCount <> 0 Then
-            Await ParseWatchers()
-        End If
-        If _parseWatchersSemaphore.CurrentCount <> 0 AndAlso IsBackgroundCompactingEnabled Then
-            Await BackgroundCompact()
-        End If
-    End Sub
+            If _parseWatchersSemaphore.CurrentCount <> 0 Then
+                Await ParseWatchers()
+            End If
+            If _parseWatchersSemaphore.CurrentCount <> 0 AndAlso IsBackgroundCompactingEnabled Then
+                Await BackgroundCompact()
+            End If
+        Finally
+
+            _isHandlingIdle = False
+        End Try
+    End Function
+
 
     Public Async Function ParseWatchers(Optional ParseAll As Boolean = False) As Task
         Dim acquired = Await _parseWatchersSemaphore.WaitAsync(0)
         If Not acquired Then Return
 
         Try
+            Debug.WriteLine("Background Parsing Watchers")
 
-            Dim WatchersToCheck = If(ParseAll, FolderMonitors, FolderMonitors.Where(Function(w) w.HasTargetChanged))
+            Dim WatchersToCheck = If(ParseAll, FolderMonitors, FolderMonitors.Where(Function(w) w.HasTargetChanged)).ToList()
 
             If Not WatchersToCheck.Any() Then Return
 
+            Dim watchersToRemove = WatchersToCheck.Where(Function(f) Not IO.Directory.Exists(f.Folder)).ToList()
+            If watchersToRemove.Any() Then
+                Debug.WriteLine($"Removing {watchersToRemove.Count} folders that do not exist from watcher list.")
+                For Each fsWatcher In watchersToRemove
+                    RemoveWatched(WatchedFolders.FirstOrDefault(Function(f) f.Folder = fsWatcher.Folder))
+                Next
+            End If
+
             For Each fsWatcher In WatchersToCheck.OrderBy(Function(f) f.DisplayName)
+
                 Await Analyse(fsWatcher.Folder, ParseAll)
             Next
 
@@ -248,6 +278,27 @@ Public Class Watcher : Inherits ObservableObject
 
     End Function
 
+    Public Async Function ParseSingleWatcher(watchedFolder As WatchedFolder) As Task
+
+        Dim acquired = Await _parseWatchersSemaphore.WaitAsync(0)
+        If Not acquired Then Return
+
+        Try
+            If watchedFolder Is Nothing Then Return
+            If Not IO.Directory.Exists(watchedFolder.Folder) Then
+                RemoveWatched(watchedFolder)
+                Return
+            End If
+
+            Await Analyse(watchedFolder.Folder, False)
+            LastAnalysed = DateTime.Now
+            WriteToFile()
+        Finally
+            _parseWatchersSemaphore.Release()
+        End Try
+
+
+    End Function
 
     Public Async Function BackgroundCompact() As Task
 
@@ -256,9 +307,9 @@ Public Class Watcher : Inherits ObservableObject
 
         Try
 
-            If BGCompactor.isCompactorActive Then Return
+            If BGCompactor.IsCompactorActive Then Return
 
-            If Not WatchedFolders.Any(Function(f) f.DecayPercentage <> 0 AndAlso f.CompressionLevel <> Core.CompressionAlgorithm.NO_COMPRESSION) Then
+            If Not WatchedFolders.Any(Function(f) f.DecayPercentage <> 0 AndAlso f.CompressionLevel <> WOFCompressionAlgorithm.NO_COMPRESSION) Then
                 Return
             End If
 
@@ -274,28 +325,38 @@ Public Class Watcher : Inherits ObservableObject
 
     Public Async Function Analyse(folder As String, checkDiskModified As Boolean) As Task(Of Boolean)
         Debug.WriteLine("Background Analysing: " & folder)
-        Dim analyser As New Core.Analyser(folder)
-
-        Await analyser.AnalyseFolder(Nothing)
+        Dim analyser As New Analyser(folder)
 
         Dim watched = WatchedFolders.First(Function(f) f.Folder = folder)
         watched.IsWorking = True
+
+        Dim ret = Await analyser.AnalyseFolder(Nothing)
+
+        analyser.FileCompressionDetailsList.Clear()
+
+
         watched.LastCheckedDate = DateTime.Now
         watched.LastCheckedSize = analyser.CompressedBytes
         watched.LastUncompressedSize = analyser.UncompressedBytes
 
         watched.LastSystemModifiedDate = FolderMonitors.First(Function(f) f.Folder = folder).LastChangedDate
-        Dim mainCompressionLVL = analyser.FileCompressionDetailsList.Select(Function(f) f.CompressionMode).Max
-        watched.CompressionLevel = mainCompressionLVL
-        If checkDiskModified Then
-            Dim lastDiskWriteTime = analyser.FileCompressionDetailsList.Select(Function(fl)
-                                                                                   Dim finfo As New IO.FileInfo(fl.FileName)
-                                                                                   Return finfo.LastWriteTime
-                                                                               End Function).OrderByDescending(Function(f) f).First
 
-            watched.LastSystemModifiedDate = If(watched.LastSystemModifiedDate < lastDiskWriteTime, lastDiskWriteTime, watched.LastSystemModifiedDate)
+        If analyser.FileCompressionDetailsList.Count <> 0 Then
+            Dim mainCompressionLVL = analyser.FileCompressionDetailsList?.Select(Function(f) f.CompressionMode).Max
+            watched.CompressionLevel = If(mainCompressionLVL, WOFCompressionAlgorithm.NO_COMPRESSION)
 
+            If checkDiskModified Then
+                Dim lastDiskWriteTime = analyser.FileCompressionDetailsList.Select(Function(fl)
+                                                                                       Dim finfo As New IO.FileInfo(fl.FileName)
+                                                                                       Return finfo.LastWriteTime
+                                                                                   End Function).OrderByDescending(Function(f) f).First
+
+                watched.LastSystemModifiedDate = If(watched.LastSystemModifiedDate < lastDiskWriteTime, lastDiskWriteTime, watched.LastSystemModifiedDate)
+
+            End If
         End If
+
+
 
         FolderMonitors.First(Function(f) f.Folder = folder).HasTargetChanged = False
         watched.IsWorking = False

@@ -33,7 +33,7 @@ Public Class Analyser
                                     SyncLock fileDetails
                                         fileDetails.Add(details)
                                     End SyncLock
-                                    If details.CompressionMode <> CompressionAlgorithm.NO_COMPRESSION Then
+                                    If details.CompressionMode <> WOFCompressionAlgorithm.NO_COMPRESSION Then
                                         Interlocked.Increment(compressedFilesCount)
                                     End If
                                     Interlocked.Add(localCompressedBytes, details.CompressedSize)
@@ -63,7 +63,7 @@ Public Class Analyser
             If compSize < 0 Then
                 compSize = unCompSize ' GetFileSizeOnDisk failed, fall back to unCompSize
             End If
-            Dim cLevel As CompressionAlgorithm = If(compSize = unCompSize, CompressionAlgorithm.NO_COMPRESSION, DetectCompression(fInfo))
+            Dim cLevel As WOFCompressionAlgorithm = If(compSize = unCompSize, WOFCompressionAlgorithm.NO_COMPRESSION, DetectCompression(fInfo))
 
             Return New AnalysedFileDetails With {.FileName = file, .CompressedSize = compSize, .UncompressedSize = unCompSize, .CompressionMode = cLevel, .FileInfo = fInfo}
         Catch ex As IOException
@@ -80,7 +80,7 @@ Public Class Analyser
             Dim extRes As New Concurrent.ConcurrentDictionary(Of String, ExtensionResult)
             Parallel.ForEach(FileCompressionDetailsList,
                                Sub(fl)
-                                   Dim xt = New IO.FileInfo(fl.FileName).Extension
+                                   Dim xt = New FileInfo(fl.FileName).Extension
                                    If fl.UncompressedSize = 0 Then Return
 
                                    extRes.AddOrUpdate(xt,
@@ -110,7 +110,7 @@ Public Class Analyser
     End Function
 
 
-    Private Function DetectCompression(fInfo As FileInfo) As CompressionAlgorithm
+    Private Function DetectCompression(fInfo As FileInfo) As WOFCompressionAlgorithm
 
         Dim isextFile As Integer
         Dim prov As ULong
@@ -118,14 +118,17 @@ Public Class Analyser
         Dim buf As UInt16 = 8
 
         Dim ret = WofIsExternalFile(fInfo.FullName, isextFile, prov, info, buf)
-        If isextFile = 0 Then info.Algorithm = CompressionAlgorithm.NO_COMPRESSION
-        If (fInfo.Attributes And 2048) <> 0 Then info.Algorithm = CompressionAlgorithm.LZNT1
-        Return info.Algorithm
+
+        Dim algorithm As WOFCompressionAlgorithm = info.Algorithm
+
+        If isextFile = 0 Then algorithm = WOFCompressionAlgorithm.NO_COMPRESSION
+        If (fInfo.Attributes And 2048) <> 0 Then algorithm = WOFCompressionAlgorithm.LZNT1
+        Return algorithm
 
     End Function
 
 
-    Public Function HasDirectoryWritePermission() As Boolean
+    Public Shared Function HasDirectoryWritePermission(FolderName As String) As Boolean
         Try
             Dim directoryInfo = New DirectoryInfo(FolderName)
             Dim directorySecurity = directoryInfo.GetAccessControl()

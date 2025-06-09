@@ -3,47 +3,65 @@ Imports System.Runtime.CompilerServices
 Imports System.Runtime.InteropServices
 Imports System.Text
 Public Module SharedMethods
+    Public Enum FolderVerificationResult
+        Valid = 0
+        DirectoryDoesNotExist
+        SystemDirectory
+        RootDirectory
+        DirectoryEmptyOrUnauthorized
+        OneDriveFolder
+        NonNTFSDrive
+        InsufficientPermission
+    End Enum
 
+    Function verifyFolder(folder As String) As FolderVerificationResult
 
-    Function verifyFolder(folder As String) As (isValid As Boolean, msg As String)
-
-        If Not IO.Directory.Exists(folder) Then : Return (False, "Directory does not exist")
-        ElseIf folder.Contains((Environment.GetFolderPath(Environment.SpecialFolder.Windows))) Then : Return (False, "Cannot compress system directory")
-        ElseIf folder.EndsWith(":\") Then : Return (False, "Cannot compress root directory")
-        ElseIf IsDirectoryEmptySafe(folder) Then : Return (False, "This directory is either empty or you are not authorized to access its files.")
-        ElseIf IsOneDriveFolder(folder) Then : Return (False, "Files synced with OneDrive cannot be compressed as they use a different storage structure")
-        ElseIf DriveInfo.GetDrives().First(Function(f) folder.StartsWith(f.Name)).DriveFormat <> "NTFS" Then : Return (False, "Cannot compress a directory on a non-NTFS drive")
+        If Not Directory.Exists(folder) Then : Return FolderVerificationResult.DirectoryDoesNotExist
+        ElseIf folder.ToLowerInvariant.Contains((Environment.GetFolderPath(Environment.SpecialFolder.Windows)).ToLowerInvariant) Then : Return FolderVerificationResult.SystemDirectory
+        ElseIf folder.EndsWith(":\") Then : Return FolderVerificationResult.RootDirectory
+        ElseIf IsDirectoryEmptySafe(folder) Then : Return FolderVerificationResult.DirectoryEmptyOrUnauthorized
+        ElseIf IsOneDriveFolder(folder) Then : Return FolderVerificationResult.OneDriveFolder
+        ElseIf DriveInfo.GetDrives().First(Function(f) folder.StartsWith(f.Name)).DriveFormat <> "NTFS" Then : Return FolderVerificationResult.NonNTFSDrive
+        ElseIf Not Analyser.HasDirectoryWritePermission(folder) Then : Return FolderVerificationResult.InsufficientPermission
         End If
 
-        Return (True, "")
+        Return FolderVerificationResult.Valid
 
     End Function
+
+
+    Function GetFolderVerificationMessage(result As FolderVerificationResult) As String
+        Select Case result
+            Case FolderVerificationResult.Valid
+                Return ""
+            Case FolderVerificationResult.DirectoryDoesNotExist
+                Return "Directory does not exist"
+            Case FolderVerificationResult.SystemDirectory
+                Return "Cannot compress system directory"
+            Case FolderVerificationResult.RootDirectory
+                Return "Cannot compress root directory"
+            Case FolderVerificationResult.DirectoryEmptyOrUnauthorized
+                Return "This directory is either empty or you are not authorized to access its files."
+            Case FolderVerificationResult.OneDriveFolder
+                Return "Files synced with OneDrive cannot be compressed as they use a different storage structure"
+            Case FolderVerificationResult.NonNTFSDrive
+                Return "Cannot compress a directory on a non-NTFS drive"
+            Case FolderVerificationResult.InsufficientPermission
+                Return "Insufficient permission to access this folder."
+            Case Else
+                Return "Unknown error"
+        End Select
+    End Function
+
+
 
     Function IsDirectoryEmptySafe(folder As String)
 
         Try
-            Return Not IO.Directory.EnumerateFileSystemEntries(folder).Any()
+            Return Not Directory.EnumerateFileSystemEntries(folder).Any()
 
-            For Each subdir In IO.Directory.EnumerateDirectories(folder)
-                Try
-                    If Not IsDirectoryEmptySafe(subdir) Then Return False
-                Catch ex As System.UnauthorizedAccessException
 
-                End Try
-            Next
-
-            For Each file In IO.Directory.EnumerateFiles(folder)
-                Try
-                    Return False
-                Catch ex As System.UnauthorizedAccessException
-
-                End Try
-            Next
-
-            Return True
-
-        Catch ex As System.UnauthorizedAccessException
-            MsgBox("You are not authorized to access some items in this folder." & vbCrLf & "Please try running CompactGUI as an administrator, otherwise these items will be skipped.", MsgBoxStyle.Exclamation, "Unauthorized Access")
+        Catch ex As UnauthorizedAccessException
             Return False
 
         Catch ex As Exception
@@ -127,6 +145,14 @@ Public Module SharedMethods
         Return oneDrivePaths.Any(Function(odPath) normalizedFolderPath.StartsWith(Path.GetFullPath(odPath).TrimEnd(Path.DirectorySeparatorChar).ToLowerInvariant()))
     End Function
 
+    Public Sub PreventSleep()
+        SetThreadExecutionState(EXECUTION_STATE.ES_CONTINUOUS Or EXECUTION_STATE.ES_SYSTEM_REQUIRED Or EXECUTION_STATE.ES_DISPLAY_REQUIRED)
+    End Sub
+    Public Sub RestoreSleep()
+        SetThreadExecutionState(EXECUTION_STATE.ES_CONTINUOUS)
+    End Sub
+
+
 #Region "DLL Imports"
 
     <DllImport("kernel32.dll", SetLastError:=True)>
@@ -138,8 +164,8 @@ Public Module SharedMethods
 
     <DllImport("kernel32.dll", CharSet:=CharSet.Auto)>
     Private Function GetShortPathName(
-        <MarshalAs(UnmanagedType.LPTStr)> ByVal path As String,
-        <MarshalAs(UnmanagedType.LPTStr)> ByVal shortPath As StringBuilder, ByVal shortPathLength As Integer) As Integer
+        <MarshalAs(UnmanagedType.LPTStr)> path As String,
+        <MarshalAs(UnmanagedType.LPTStr)> shortPath As StringBuilder, shortPathLength As Integer) As Integer
 
     End Function
 
@@ -147,13 +173,25 @@ Public Module SharedMethods
 
     <DllImport("kernel32.dll", SetLastError:=True, CharSet:=CharSet.Auto)>
     Private Function GetDiskFreeSpace(
-        ByVal lpRootPathName As String,
+        lpRootPathName As String,
         <Out> ByRef lpSectorsPerCluster As UInteger,
         <Out> ByRef lpBytesPerSector As UInteger,
         <Out> ByRef lpNumberOfFreeClusters As UInteger,
         <Out> ByRef lpTotalNumberOfClusters As UInteger) As Boolean
     End Function
 
+
+    <DllImport("kernel32.dll", SetLastError:=True)>
+    Private Function SetThreadExecutionState(esFlags As EXECUTION_STATE) As EXECUTION_STATE
+    End Function
+
+    <Flags()>
+    Private Enum EXECUTION_STATE As UInteger
+        ES_AWAYMODE_REQUIRED = &H40
+        ES_CONTINUOUS = &H80000000UI
+        ES_DISPLAY_REQUIRED = &H2
+        ES_SYSTEM_REQUIRED = &H1
+    End Enum
 
 #End Region
 
